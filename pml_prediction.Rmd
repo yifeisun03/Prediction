@@ -1,0 +1,146 @@
+---
+title: "Prediction_pml"
+author: "YS"
+date: "8/19/2021"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+
+```{r setup, cache = T, echo = F, message = F, warning = F, tidy = F}
+#library load
+library(knitr)
+library(ggplot2)
+library(caret)
+library("plotly")
+library("readr")
+library(corrplot)
+library(rattle)
+library(gridExtra)
+#setting options
+options(width = 100)
+opts_chunk$set(message = F, error = F, warning = F, comment = NA, fig.align = 'center', dpi = 100, tidy = F, cache.path = '.cache/', fig.path = 'fig/')
+options(xtable.type = 'html')
+knit_hooks$set(inline = function(x) {
+        if(is.numeric(x)) {
+                round(x, getOption('digits'))
+        } else {
+                paste(as.character(x), collapse = ', ')
+        }
+})
+knit_hooks$set(plot = knitr:::hook_plot_html)
+setwd("~/Documents/work/DATA_S/machine learning/Prediction")
+```
+## Introduction
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, the goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways.
+
+*exactly according to the specification (Class A)
+*throwing the elbows to the front (Class B)
+*lifting the dumbbell only halfway (Class C)
+*lowering the dumbbell only halfway (Class D)
+*throwing the hips to the front (Class E).
+
+
+
+## Data explore
+###read in data and clean up variable with too much empty entry and low variability.
+```{r Data clean}
+# read in data
+na.str = c("NA","Not Available","NOt available","","#DIV/0!","N/A")
+pml_train <-read.csv("pml-training.csv", na.strings = na.str)
+pml_test <- read.csv("pml-testing.csv", na.strings = na.str)
+
+#check the precentage of NA in the training data, getting ride of the columns that are too much to impute
+NA_col<-colSums(is.na(pml_train)/nrow(pml_train))
+NA_rm<-names(NA_col[NA_col>0.5])
+
+pml_train<-pml_train[,!(names(pml_train) %in% NA_rm)]
+pml_test<-pml_test[,!(names(pml_test) %in% NA_rm)]
+
+#check the variability of the variable
+nsv <- nearZeroVar(pml_train,saveMetrics=TRUE)
+pml_train<-pml_train[,nsv$nzv==FALSE]
+pml_test<-pml_test[,nsv$nzv==FALSE]
+
+#get rid of columns that not related to movement detection
+pml_train<-pml_train[,-c(1:6)]
+pml_test<-pml_test[,-c(1:6)]
+```
+###read in data and clean up variable with too much empty entry and low variability.
+```{r explore variables,fig.height=6.5,fig.width=5.5,echo=FALSE,fig.align="center"}
+M <- abs(cor(pml_train[,-53]))
+diag(M) <- 0
+which(M > 0.8,arr.ind=T)
+corrplot(cor(pml_train[,-53]), order = "FPC", method = "color", type = "lower", tl.cex=0.5, tl.col = rgb(0,0,0))
+```
+Result:There are some variables that are highly correlated, dataset may need to be pre-processed using "PCA" method
+
+## Data training and prediction
+###fitting the training data with different models
+```{r model fit}
+#split the training dataset into 2 part, training and testing, save the original testing dataset for validation.
+inTrain = createDataPartition(pml_train$classe, p = 3/4)[[1]]
+training = pml_train[inTrain,]
+testing = pml_train[-inTrain,]
+
+#setup cross validation
+trControl=trainControl(method="cv", 5)
+
+#using rpart method for classification training 
+system.time(
+fit_rpart <- train(classe ~ .,method="rpart",trControl=trControl,data = training)
+)
+
+#using rpart method for classification training with pca preprocessing
+system.time(
+fit_rpart_pca <- train(classe ~ .,method="rpart",trControl=trControl,preProcess="pca",data = training)
+)
+
+#using random forest method for classification training 
+system.time(
+fit_rf <- train(classe ~ .,method="rf",trControl=trControl,data = training,ntree=250)
+)
+
+#using random forest method for classification training with pca pre-processing
+system.time(
+fit_rf_pca <- train(classe ~ .,method="rf",trControl=trControl,preProcess="pca",data = training,ntree=250)
+)
+```
+###predict with different models
+```{r predict with differt models}
+predict_rpart<-predict(fit_rpart,testing)
+predict_rpart_pca<-predict(fit_rpart_pca,testing)
+predict_rf<-predict(fit_rf,testing)
+predict_rf_pca<-predict(fit_rf_pca,testing)
+
+CM_rpart<-confusionMatrix(as.factor(testing$classe),predict_rpart)
+CM_rpart_pca<-confusionMatrix(as.factor(testing$classe),predict_rpart_pca)
+CM_rf<-confusionMatrix(testing$classe,predict_rf)
+CM_rf_pca<-confusionMatrix(testing$classe,predict_rf_pca)
+```
+###Comparing Models
+```{r compare model}
+cvValues <- resamples(list(rpart = fit_rpart, rpart_pca = fit_rpart_pca,
+                           rf = fit_rf, rf_pca = fit_rf_pca))
+
+summary(cvValues)
+dotplot(cvValues,main = "Model comparison")
+  
+```
+result:
+* Pre-processing with PCA increase the computing time but not improving the accuracy
+* Random forest with cross validation yield the best result from the selected testing models
+```{r explore and validate the best model selected}
+plot(fit_rf$finalModel,main="error rate by number of trees")
+plot(fit_rf,main="Accuracy by numbres of perdictor")
+varImp(fit_rf, scale = T)
+```
+
+##Final prediction
+```{r final prediction}
+predict_final<-predict(fit_rf,pml_test)
+predict_final
+```
+
